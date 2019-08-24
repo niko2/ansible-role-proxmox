@@ -4,11 +4,12 @@
 lae.proxmox
 ===========
 
-Installs and configures a Proxmox 5.x cluster with the following features:
+Installs and configures a Proxmox 5.x/6.x cluster with the following features:
 
 - Ensures all hosts can connect to one another as root
 - Ability to create/manage groups, users, access control lists and storage
 - Ability to create or add nodes to a PVE cluster
+- Ability to setup Ceph on the nodes
 - IPMI watchdog support
 - BYO HTTPS certificate support
 - Ability to use either `pve-no-subscription` or `pve-enterprise` repositories
@@ -176,6 +177,7 @@ pve_storages:
     content: [ "images", "iso", "backup" ]
     path: /plop
     maxfiles: 4
+pve_ssh_port: 22
 
 interfaces_template: "interfaces-{{ pve_group }}.j2"
 ```
@@ -214,6 +216,10 @@ of the `ops` group. Read the **User and ACL Management** section for more info.
 `pve_storages` allows to create different types of storage and configure them.
 The backend needs to be supported by [Proxmox](https://pve.proxmox.com/pve-docs/chapter-pvesm.html).
 Read the **Storage Management** section for more info.
+
+`pve_ssh_port` allows you to change the SSH service port. If your SSH is listing
+on a different port then 22, please set this variable. If a new node is joining
+the cluster, the PVE cluster needs to communicate once via SSH.
 
 `interfaces_template` is set to the path of a template we'll use for configuring
 the network on these Debian machines. This is only necessary if you want to
@@ -386,12 +392,22 @@ pve_watchdog_ipmi_timeout: 10 # Number of seconds the watchdog should wait
 pve_zfs_enabled: no # Specifies whether or not to install and configure ZFS packages
 # pve_zfs_options: "" # modprobe parameters to pass to zfs module on boot/modprobe
 # pve_zfs_zed_email: "" # Should be set to an email to receive ZFS notifications
+pve_ceph_enabled: false # Specifies wheter or not to install and configure Ceph packages. See below for an example configuration.
+pve_ceph_repository_line: "deb http://download.proxmox.com/debian/ceph-nautilus buster main" # apt-repository configuration. Will be automatically set for 5.x and 6.x (Further information: https://pve.proxmox.com/wiki/Package_Repositories)
+pve_ceph_network: "{{ (ansible_default_ipv4.network +'/'+ ansible_default_ipv4.netmask) | ipaddr('net') }}" # Ceph cluster network
+pve_ceph_mon_group: "{{ pve_group }}" # Host group containing all Ceph monitor hosts
+pve_ceph_mds_group: "{{ pve_group }}" # Host group containing all Ceph metadata server hosts
+pve_ceph_osds: [] # List of OSD disks
+pve_ceph_pools: [] # List of pools to create
+pve_ceph_fs: [] # List of CephFS filesystems to create
+pve_ceph_crush_rules: [] # List of CRUSH rules to create
 # pve_ssl_private_key: "" # Should be set to the contents of the private key to use for HTTPS
 # pve_ssl_certificate: "" # Should be set to the contents of the certificate to use for HTTPS
 pve_ssl_letsencrypt: false # Specifies whether or not to obtain a SSL certificate using Let's Encrypt
 pve_groups: [] # List of group definitions to manage in PVE. See section on User Management.
 pve_users: [] # List of user definitions to manage in PVE. See section on User Management.
 pve_storages: [] # List of storages to manage in PVE. See section on Storage Management.
+pve_datacenter_cfg: {} # Dictionary to configure the PVE datacenter.cfg config file.
 ```
 
 To enable clustering with this role, configure the following variables appropriately:
@@ -411,6 +427,15 @@ pve_cluster_bindnet0_addr: "{{ pve_cluster_ring0_addr }}"
 # pve_cluster_bindnet1_addr: "{{ pve_cluster_ring1_addr }}"
 
 ```
+
+You can set options in the datacenter.cfg configuration file:
+```
+pve_datacenter_cfg:
+  keyboard: en-us
+```
+
+All configuration options supported in the datacenter.cfg file are documented in the
+[Proxmox manual datacenter.cfg section][datacenter-cfg].
 
 ## Dependencies
 
@@ -526,6 +551,47 @@ pve_storages:
 Refer to `library/proxmox_storage.py` [link][storage-module] for module
 documentation.
 
+## Ceph configuration
+
+This role can configure the Ceph storage system on your Proxmox hosts.
+
+```
+pve_ceph_enabled: true
+pve_ceph_network: '172.10.0.0/24'
+pve_ceph_osds:
+  # OSD with everything on the same device
+  - device: /dev/sdc
+  # OSD with block.db/WAL on another device
+  - device: /dev/sdd
+    block.db: /dev/sdb1
+# Crush rules for different storage classes
+pve_ceph_crush_rules:
+  - name: ssd
+    class: ssd
+  - name: hdd
+    class: hdd
+# 2 Ceph pools for VM disks which will also be defined as Proxmox storages
+# Using different CRUSH rules
+pve_ceph_pools:
+  - name: ssd
+    pgs: 128
+    rule: ssd
+    application: rbd
+    storage: true
+  - name: hdd
+    pgs: 32
+    rule: hdd
+    application: rbd
+    storage: true
+# A CephFS filesystem not defined as a Proxmox storage
+pve_ceph_fs:
+  - name: backup
+    pgs: 64
+    rule: hdd
+    storage: false
+    mountpoint: /srv/proxmox/backup
+```
+
 ## Contributors
 
 Musee Ullah ([@lae](https://github.com/lae), <lae@lae.is>)  
@@ -543,3 +609,4 @@ Fabien Brachere ([@Fbrachere](https://github.com/Fbrachere))
 [group-module]: https://github.com/lae/ansible-role-proxmox/blob/master/library/proxmox_group.py
 [acl-module]: https://github.com/lae/ansible-role-proxmox/blob/master/library/proxmox_group.py
 [storage-module]: https://github.com/lae/ansible-role-proxmox/blob/master/library/proxmox_storage.py
+[datacenter-cfg]: https://pve.proxmox.com/wiki/Manual:_datacenter.cfg
